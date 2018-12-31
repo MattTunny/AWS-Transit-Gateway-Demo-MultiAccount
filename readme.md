@@ -26,7 +26,7 @@ aws cloudformation deploy --template-file output1.yaml --stack-name 'TransitDemo
 
 ```
 aws cloudformation package --s3-bucket randombucket --template-file account-2.yaml --output-template-file output2.yaml --profile account2
-aws cloudformation deploy --template-file output2.yaml --stack-name 'TransitDemo' --capabilities CAPABILITY_IAM --profile account 2
+aws cloudformation deploy --template-file output2.yaml --stack-name 'TransitDemo' --capabilities CAPABILITY_IAM --profile account2
 ```
 
 * You should now have connectivity between 2 accounts. SSM Session Manager is configured in this template so if you have upgraded SSM agent installed locally you can test:
