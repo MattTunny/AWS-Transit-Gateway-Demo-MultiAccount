@@ -1,4 +1,4 @@
-# Transit GateWay Demo with Session Manager
+# Transit GateWay Demo with Session Manager between Multi Accounts
 These cloudformation templates will create a VPC with Transit Gatway and share it between 2 accounts. SSM is already configured so its easy to test network connectivity.
 
 ## Pre-reqs
