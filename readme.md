@@ -1,7 +1,7 @@
 # AWS Transit GateWay Demo with Session Manager between Multi Accounts
 These cloudformation templates will create a VPC with Transit Gatway and share it between 2 accounts. SSM is already configured so its easy to test network connectivity.
 
-![](https://github.com/MattTunny/AWS-Transit-Gateway-Demo-MultiAccount/blob/master/tgw.jpg)
+![](https://github.com/MattTunny/AWS-Transit-Gateway-Demo-MultiAccount/blob/master/tgw1.jpg)
 <br>
 
 ## Pre-reqs
