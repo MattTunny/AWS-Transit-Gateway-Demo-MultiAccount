@@ -1,0 +1,8 @@
+setup.cfg
+setup.py
+helowrld/__init__.py
+pprint.egg-info/PKG-INFO
+pprint.egg-info/SOURCES.txt
+pprint.egg-info/dependency_links.txt
+pprint.egg-info/not-zip-safe
+pprint.egg-info/top_level.txt

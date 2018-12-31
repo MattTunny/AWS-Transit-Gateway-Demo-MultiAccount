@@ -1,0 +1,388 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: >
+  Transit Gateway Demo in Organizations: These cloudformation templates will create a VPC with Transit Gatway 
+  and share it between 2 accounts. SSM is already configured so its easy to test network connectivity.
+
+  Remember to update S3BucketName & AccountTwo
+
+  . **WARNING** This template creates Amazon EC2 instances. You will be 
+  billed for the AWS resources used if you create a stack from this template.
+
+Parameters:
+
+  S3BucketName:
+    Type: String
+    Default: randombucket
+
+  AccountTwo:
+    Type: String
+    Default: 123456789012
+
+  AmznLinux2AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+  # Windows2016AmiId:
+  #   Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+  #   Default: /aws/service/ami-windows-latest/Windows_Server-2016-English-Full-Base
+
+  AccountOneCIDRvpc:
+    Type: String
+    Default: 10.1.0.0/16
+
+  AccountOnePrivateSubnet:
+    Type: String
+    Default: 10.1.0.0/24
+
+  CIDR:
+    Type: String
+    Default: '0.0.0.0/0'
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref AccountOneCIDRvpc
+      EnableDnsSupport: True
+      EnableDnsHostnames: True
+      Tags:
+        - Key: Name
+          Value: Account-1-VPC
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref AccountOnePrivateSubnet
+      Tags:
+        - Key: Name
+          Value: AccountOnePrivateSubnet
+      VpcId: !Ref VPC
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: SMRouteTable
+
+  # TransitGateway Not yet supported so need custom cloudformation lambda
+  # TransitRouteEntry:
+  #   Type: AWS::EC2::Route
+  #   DependsOn: TransitGateway
+  #   Properties:
+  #     RouteTableId: !Ref RouteTable
+  #     DestinationCidrBlock: 0.0.0.0/0
+  #     GatewayId: !Ref TransitGateway
+
+  LambdaCustomRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        -
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateRoute
+                  - ec2:ReplaceRoute
+                  - ec2:DeleteRoute
+                  - ec2:UpdateRouteTable
+                  - ec2:AssociateRouteTable
+                  - ec2:ReplaceRouteTableAssociation
+                  - ec2:DisassociateRouteTable
+                  - logs:*
+                  - ram:*
+                Resource: "*"
+          PolicyName: LambdaPolicyTransitGateway
+
+  ShareResource:
+      Type: AWS::Lambda::Function
+      Properties: 
+        Description: Shares TransitGateway to Organisation
+        Handler: index.handler
+        Code:
+          S3Bucket: !Ref S3BucketName
+          S3Key: share-resources.zip
+        MemorySize: 128
+        Role: !GetAtt LambdaCustomRole.Arn
+        Runtime: python3.6
+        Timeout: 30
+        Environment:
+          Variables:
+            REGION: !Ref AWS::Region
+            ACCOUNT: !Ref AWS::AccountId
+            SECONDACC: !Ref AccountTwo
+            TRANSITGTW: !Ref TransitGateway
+            STACKNAME: !Ref AWS::StackName
+
+  CustomResourceShareTransit:
+    Type: "Custom::Lambda"
+    Properties:
+      ServiceToken: !GetAtt ShareResource.Arn 
+
+  UpdateRouteTable:
+      Type: AWS::Lambda::Function
+      DependsOn: TransitGatewayAttachment
+      Properties: 
+        Description: Update Route Tables
+        Handler: index.handler
+        Code:
+          S3Bucket: !Ref S3BucketName
+          S3Key: update-route-table.zip
+        MemorySize: 128
+        Role: !GetAtt LambdaCustomRole.Arn
+        Runtime: python3.6
+        Timeout: 30
+        Environment:
+          Variables:
+            TRANSITGTW: !Ref TransitGateway
+            RT: !Ref RouteTable
+            CIDR: !Ref CIDR
+
+  CustomResourceUpdateRT:
+    Type: "Custom::Lambda"
+    Properties:
+      ServiceToken: !GetAtt UpdateRouteTable.Arn
+
+  RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  DefaultSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: DefaultSG
+      GroupDescription: Default Security Group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: 443
+          ToPort: 443
+        - IpProtocol: icmp
+          CidrIp: 10.0.0.0/8
+          FromPort: -1
+          ToPort: -1
+      Tags:
+        - Key: Name
+          Value: DefaultSG
+      VpcId: !Ref VPC
+
+  InboundSGRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+          - DefaultSG
+          - GroupId
+      GroupId:
+        Fn::GetAtt:
+          - DefaultSG
+          - GroupId
+      
+  TransitGateway:
+    Type: "AWS::EC2::TransitGateway"
+    Properties:
+      AutoAcceptSharedAttachments: enable
+      DefaultRouteTableAssociation: enable
+      DefaultRouteTablePropagation: enable
+      Description: Transit Gateway Demo
+      DnsSupport: enable
+      VpnEcmpSupport: enable
+      Tags: 
+        - Key: Name
+          Value: Transit Gateway Demo
+
+  TransitGatewayAttachment:    
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds: 
+        - !Ref PrivateSubnet
+      Tags: 
+        - Key: Name
+          Value: Transite Gateway Demo
+      TransitGatewayId: !Ref TransitGateway
+      VpcId: !Ref VPC
+
+  # Bucket Policy so Account Two can use same packages
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3BucketName
+      PolicyDocument:
+        Id: ReportPolicy
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAccountOneAccess
+            Effect: Allow
+            Action: "s3:*"
+            Principal:
+              AWS: !Join ['', ["arn:aws:iam::", !Ref "AWS::AccountId", ":root"]]
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref S3BucketName, '/*']]
+          - Sid: AllowAccountTwoAccess
+            Effect: Allow
+            Action: "s3:*"
+            Principal:
+              AWS: !Join ['', ["arn:aws:iam::", !Ref "AccountTwo", ":root"]]
+            Resource: !Join ['', ['arn:aws:s3:::', !Ref S3BucketName, '/*']]
+
+  S3VPNEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref RouteTable
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"  
+      VpcEndpointType: Gateway
+
+  CfnEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.cloudformation"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref DefaultSG
+
+  EC2Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref DefaultSG
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref DefaultSG
+
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref DefaultSG
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: True
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref DefaultSG
+
+  SSMIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+
+  SSMInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - Ref: SSMIAMRole
+
+  AmazonLinux2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      IamInstanceProfile: !Ref SSMInstanceProfile
+      ImageId: !Ref AmznLinux2AmiId
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref DefaultSG
+      SubnetId: !Ref PrivateSubnet
+      Tags:
+        - Key: Name
+          Value: Amazon Linux 2
+
+  # Windows2016Instance:
+  #   Type: AWS::EC2::Instance
+  #   Properties:
+  #     IamInstanceProfile: !Ref SSMInstanceProfile
+  #     ImageId: !Ref Windows2016AmiId
+  #     InstanceType: t2.micro
+  #     SecurityGroupIds:
+  #       - !Ref DefaultSG
+  #     SubnetId: !Ref PrivateSubnet
+  #     BlockDeviceMappings:
+  #       -
+  #         DeviceName: /dev/sda1
+  #         Ebs:
+  #           VolumeSize: 50
+  #       -
+  #         DeviceName: /dev/xvdf
+  #         Ebs:
+  #           VolumeSize: 300
+  #     Tags:
+  #       - Key: Name
+  #         Value: Windows 2016
+
+Outputs:
+  MyStackName:
+    Description: StackName
+    Value: !Ref "AWS::StackName"
+  StackVPC:
+    Description: The ID of the VPC
+    Value: !Ref VPC
+  TransitGateWayOutput:
+    Description: The ID of the TransitGateway
+    Value: !Ref TransitGateway
+  RouteTableOutput:
+    Description: RouteTable Output
+    Value: !Ref RouteTable
