@@ -4,16 +4,12 @@ Description: >
   Transit Gateway Demo in Organizations: These cloudformation templates will create a VPC with Transit Gatway 
   and share it between 2 accounts. SSM is already configured so its easy to test network connectivity.
 
-  Remember to update S3BucketName & AccountTwo
+  Manual Update AccountTwo and Share Resource
 
   . **WARNING** This template creates Amazon EC2 instances. You will be 
   billed for the AWS resources used if you create a stack from this template.
 
 Parameters:
-
-  S3BucketName:
-    Type: String
-    Default: randombucket
 
   AccountTwo:
     Type: String
@@ -61,111 +57,48 @@ Resources:
 
   RouteTable:
     Type: AWS::EC2::RouteTable
+    DependsOn: TransitGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
           Value: SMRouteTable
 
-  # TransitGateway Not yet supported so need custom cloudformation lambda
-  # TransitRouteEntry:
-  #   Type: AWS::EC2::Route
-  #   DependsOn: TransitGateway
+  TransitRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: TransitGatewayRouteTable
+      TransitGatewayId: !Ref TransitGateway
+
+  TransitGateWayRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties: 
+      Blackhole: false
+      DestinationCidrBlock: 0.0.0.0/0
+      TransitGatewayAttachmentId: !Ref TransitGatewayAttachment
+      TransitGatewayRouteTableId: !Ref TransitRouteTable
+
+  TransiteGatewayRTTransitGatewayRouteTableAssociation:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties: 
+      TransitGatewayAttachmentId: !Ref TransitGatewayAttachment
+      TransitGatewayRouteTableId: !Ref TransitRouteTable
+
+  TransitGatewayRTPropagation:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties: 
+      TransitGatewayAttachmentId: !Ref TransitGatewayAttachment
+      TransitGatewayRouteTableId: !Ref TransitRouteTable
+
+  # RouteTableAssociation:
+  #   Type: AWS::EC2::SubnetRouteTableAssociation
+  #   DependsOn: TransitGatewayAttachment
   #   Properties:
   #     RouteTableId: !Ref RouteTable
-  #     DestinationCidrBlock: 0.0.0.0/0
-  #     GatewayId: !Ref TransitGateway
+  #     SubnetId: !Ref PrivateSubnet
 
-  LambdaCustomRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          -
-            Effect: Allow
-            Principal:
-              Service: [lambda.amazonaws.com]
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-      Policies:
-        -
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              -
-                Effect: Allow
-                Action:
-                  - ec2:Describe*
-                  - ec2:CreateRoute
-                  - ec2:ReplaceRoute
-                  - ec2:DeleteRoute
-                  - ec2:UpdateRouteTable
-                  - ec2:AssociateRouteTable
-                  - ec2:ReplaceRouteTableAssociation
-                  - ec2:DisassociateRouteTable
-                  - logs:*
-                  - ram:*
-                Resource: "*"
-          PolicyName: LambdaPolicyTransitGateway
-
-  ShareResource:
-      Type: AWS::Lambda::Function
-      Properties: 
-        Description: Shares TransitGateway to Organisation
-        Handler: index.handler
-        Code:
-          S3Bucket: !Ref S3BucketName
-          S3Key: share-resources.zip
-        MemorySize: 128
-        Role: !GetAtt LambdaCustomRole.Arn
-        Runtime: python3.6
-        Timeout: 30
-        Environment:
-          Variables:
-            REGION: !Ref AWS::Region
-            ACCOUNT: !Ref AWS::AccountId
-            SECONDACC: !Ref AccountTwo
-            TRANSITGTW: !Ref TransitGateway
-            STACKNAME: !Ref AWS::StackName
-
-  CustomResourceShareTransit:
-    Type: "Custom::Lambda"
-    Properties:
-      ServiceToken: !GetAtt ShareResource.Arn 
-
-  UpdateRouteTable:
-      Type: AWS::Lambda::Function
-      DependsOn: TransitGatewayAttachment
-      Properties: 
-        Description: Update Route Tables
-        Handler: index.handler
-        Code:
-          S3Bucket: !Ref S3BucketName
-          S3Key: update-route-table.zip
-        MemorySize: 128
-        Role: !GetAtt LambdaCustomRole.Arn
-        Runtime: python3.6
-        Timeout: 30
-        Environment:
-          Variables:
-            TRANSITGTW: !Ref TransitGateway
-            RT: !Ref RouteTable
-            CIDR: !Ref CIDR
-
-  CustomResourceUpdateRT:
-    Type: "Custom::Lambda"
-    Properties:
-      ServiceToken: !GetAtt UpdateRouteTable.Arn
-
-  RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      RouteTableId: !Ref RouteTable
-      SubnetId: !Ref PrivateSubnet
 
   DefaultSG:
     Type: AWS::EC2::SecurityGroup
@@ -202,11 +135,11 @@ Resources:
           - GroupId
       
   TransitGateway:
-    Type: "AWS::EC2::TransitGateway"
+    Type: AWS::EC2::TransitGateway
     Properties:
       AutoAcceptSharedAttachments: enable
-      DefaultRouteTableAssociation: enable
-      DefaultRouteTablePropagation: enable
+      DefaultRouteTableAssociation: disable
+      DefaultRouteTablePropagation: disable
       Description: Transit Gateway Demo
       DnsSupport: enable
       VpnEcmpSupport: enable
@@ -215,7 +148,7 @@ Resources:
           Value: Transit Gateway Demo
 
   TransitGatewayAttachment:    
-    Type: "AWS::EC2::TransitGatewayAttachment"
+    Type: AWS::EC2::TransitGatewayAttachment
     Properties:
       SubnetIds: 
         - !Ref PrivateSubnet
@@ -225,27 +158,21 @@ Resources:
       TransitGatewayId: !Ref TransitGateway
       VpcId: !Ref VPC
 
-  # Bucket Policy so Account Two can use same packages
-  BucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref S3BucketName
-      PolicyDocument:
-        Id: ReportPolicy
-        Version: "2012-10-17"
-        Statement:
-          - Sid: AllowAccountOneAccess
-            Effect: Allow
-            Action: "s3:*"
-            Principal:
-              AWS: !Join ['', ["arn:aws:iam::", !Ref "AWS::AccountId", ":root"]]
-            Resource: !Join ['', ['arn:aws:s3:::', !Ref S3BucketName, '/*']]
-          - Sid: AllowAccountTwoAccess
-            Effect: Allow
-            Action: "s3:*"
-            Principal:
-              AWS: !Join ['', ["arn:aws:iam::", !Ref "AccountTwo", ":root"]]
-            Resource: !Join ['', ['arn:aws:s3:::', !Ref S3BucketName, '/*']]
+# Cant get this share to work???
+  # TransitShare:
+  #   Type: AWS::RAM::ResourceShare
+  #   Properties:
+  #     Name: TransitGatewayShare
+  #     ResourceArns:
+  #       # - !Join ['', [ 'arn:aws:ec2:', !Ref "AWS::Region", ":", !Ref "AWS::AccountId", ":transit-gateway/", ]]
+  #       - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:transit-gateway/${TransitGateway}"
+  #     Principals:
+  #       - 123456789012
+  #     Tags:
+  #       - Key: "Key1"
+  #         Value: "Value1"
+  #       - Key: "Key2"
+  #         Value: "Value2"
 
   S3VPNEndpoint:
     Type: AWS::EC2::VPCEndpoint

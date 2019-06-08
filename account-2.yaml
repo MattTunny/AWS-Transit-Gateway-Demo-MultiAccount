@@ -4,20 +4,16 @@ Description: >
   Transit Gateway Demo in Organizations: These cloudformation templates will create a VPC with Transit Gatway 
   and share it between 2 accounts. SSM is already configured so its easy to test network connectivity.
 
-  Remember to update S3BucketName & TransitGatewayFromAccountOne
+  Remember to update TransitGatewayFromAccountOne
 
   . **WARNING** This template creates Amazon EC2 instances. You will be 
   billed for the AWS resources used if you create a stack from this template.
 
 Parameters:
 
-  S3BucketName:
-    Type: String
-    Default: randombucket
-
   TransitGatewayFromAccountOne:
     Type: String
-    Default: tgw-0e0192828f03e1234
+    Default: tgw-0602e827cbcf477db
 
   AmznLinux2AmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
@@ -67,74 +63,22 @@ Resources:
         - Key: Name
           Value: SMRouteTable
 
-  # TransitGateway Not yet supported so need custom lambda
-  # TransitRouteEntry:
-  #   Type: AWS::EC2::Route
-  #   DependsOn: TransitGateway
+  # TransitRouteTable:
+  #   Type: AWS::EC2::TransitGatewayRouteTable
   #   Properties:
-  #     RouteTableId: !Ref RouteTable
+  #     Tags:
+  #       - Key: Name
+  #         Value: TransitGatewayRouteTable
+  #     TransitGatewayId: !Ref TransitGatewayFromAccountOne
+
+  # TransitGateWayRoute:
+  #   Type: AWS::EC2::TransitGatewayRoute
+  #   Properties: 
+  #     Blackhole: false
   #     DestinationCidrBlock: 0.0.0.0/0
-  #     GatewayId: !Ref TransitGateway
-  LambdaCustomRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          -
-            Effect: Allow
-            Principal:
-              Service: [lambda.amazonaws.com]
-            Action:
-              - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-      Policies:
-        -
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              -
-                Effect: Allow
-                Action:
-                  - ec2:DescribeRouteTables
-                  - ec2:Describe*
-                  - ec2:CreateRoute
-                  - ec2:ReplaceRoute
-                  - ec2:DeleteRoute
-                  - ec2:UpdateRouteTable
-                  - ec2:AssociateRouteTable
-                  - ec2:ReplaceRouteTableAssociation
-                  - ec2:DisassociateRouteTable
-                  - logs:*
-                  - ram:*
-                Resource: "*"
-          PolicyName: LambdaPolicyTransitGateway
+  #     TransitGatewayAttachmentId: !Ref TransitGatewayAttachment
+  #     TransitGatewayRouteTableId: !Ref TransitRouteTable
 
-  UpdateRouteTable:
-      Type: AWS::Lambda::Function
-      DependsOn: TransitGatewayAttachment
-      Properties: 
-        Description: Update Route Tables
-        Handler: index.handler
-        Code:
-          S3Bucket: !Ref S3BucketName
-          S3Key: update-route-table.zip
-        MemorySize: 128
-        Role: !GetAtt LambdaCustomRole.Arn
-        Runtime: python3.6
-        Timeout: 30
-        Environment:
-          Variables:
-            TRANSITGTW: !Ref TransitGatewayFromAccountOne
-            RT: !Ref RouteTable
-            CIDR: !Ref CIDR
-
-  CustomResourceUpdateRT:
-    Type: "Custom::Lambda"
-    Properties:
-      ServiceToken: !GetAtt UpdateRouteTable.Arn
 
   RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -177,7 +121,7 @@ Resources:
           - GroupId
 
   TransitGatewayAttachment:    
-    Type: "AWS::EC2::TransitGatewayAttachment"
+    Type: AWS::EC2::TransitGatewayAttachment
     Properties:
       SubnetIds: 
         - !Ref PrivateSubnet
